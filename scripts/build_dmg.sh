@@ -175,7 +175,7 @@ write_info_plist() {
   local plist_path="$1"
   local icon_xml=""
   if [[ -f "$APP_ICON_ICNS" ]]; then
-    icon_xml=$'  <key>CFBundleIconFile</key>\n  <string>MeetTranscript</string>'
+    icon_xml=$'  <key>CFBundleIconFile</key>\n  <string>MeetTranscript.icns</string>'
   fi
 
   cat > "$plist_path" <<EOF
@@ -215,9 +215,11 @@ build_variant() {
   local app_bundle="$DIST_DIR/$APP_NAME$suffix.app"
   local dmg_root="$DIST_DIR/dmg-root-$variant"
   local dmg_path="$DIST_DIR/$APP_NAME$suffix.dmg"
+  local temp_rw_dmg="$DIST_DIR/$APP_NAME$suffix-rw.dmg"
+  local mount_point="$DIST_DIR/.mount-$variant"
 
   echo "Preparing $variant app bundle ..."
-  rm -rf "$app_bundle" "$dmg_root" "$dmg_path"
+  rm -rf "$app_bundle" "$dmg_root" "$dmg_path" "$temp_rw_dmg"
   mkdir -p "$app_bundle/Contents/MacOS" "$app_bundle/Contents/Resources/runtime_assets"
 
   cp "$RELEASE_BINARY" "$app_bundle/Contents/MacOS/$APP_NAME-bin"
@@ -245,14 +247,50 @@ build_variant() {
   cp -R "$app_bundle" "$dmg_root/$APP_NAME.app"
   ln -s /Applications "$dmg_root/Applications"
 
+  # Create a temporary read/write image to allow setting a custom volume icon.
   hdiutil create \
-    -volname "$APP_NAME" \
     -srcfolder "$dmg_root" \
     -ov \
-    -format UDZO \
-    "$dmg_path" >/dev/null
+    -format UDRW \
+    "$temp_rw_dmg" >/dev/null
 
-  rm -rf "$dmg_root"
+  if [[ -f "$APP_ICON_ICNS" ]]; then
+    rm -rf "$mount_point"
+    mkdir -p "$mount_point"
+
+    local attach_output
+    attach_output="$(hdiutil attach -readwrite -noverify -noautoopen -mountpoint "$mount_point" "$temp_rw_dmg")"
+    local device
+    device="$(echo "$attach_output" | awk '/^\/dev\// { print $1; exit }')"
+
+    if [[ -n "${device:-}" && -d "$mount_point" ]]; then
+      cp "$APP_ICON_ICNS" "$mount_point/.VolumeIcon.icns"
+      SetFile -a C "$mount_point"
+      SetFile -a V "$mount_point/.VolumeIcon.icns"
+      sync
+      hdiutil detach "$device" >/dev/null
+    fi
+  fi
+
+  hdiutil convert \
+    "$temp_rw_dmg" \
+    -ov \
+    -format UDZO \
+    -o "$dmg_path" >/dev/null
+
+  # Also set a custom icon on the DMG file itself (not just mounted volume).
+  if [[ -f "$APP_ICON_ICNS" ]]; then
+    local icon_source="$DIST_DIR/.dmg-icon-$variant.icns"
+    local icon_rsrc="$DIST_DIR/.dmg-icon-$variant.rsrc"
+    cp "$APP_ICON_ICNS" "$icon_source"
+    sips -i "$icon_source" >/dev/null
+    DeRez -only icns "$icon_source" > "$icon_rsrc"
+    Rez -append "$icon_rsrc" -o "$dmg_path"
+    SetFile -a C "$dmg_path"
+    rm -f "$icon_source" "$icon_rsrc"
+  fi
+
+  rm -rf "$dmg_root" "$temp_rw_dmg" "$mount_point"
   echo "DMG ready: $dmg_path"
 }
 
