@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
 APP_NAME="MeetTranscript"
 VENV_PYTHON="$ROOT_DIR/.venv/bin/python3"
+APP_ICON_ICNS="$ROOT_DIR/Brand/MeetTranscript.icns"
 VARIANT="lite"
 MODEL_NAME="base.en"
 RELEASE_BINARY=""
@@ -172,7 +173,12 @@ EOF
 
 write_info_plist() {
   local plist_path="$1"
-  cat > "$plist_path" <<'EOF'
+  local icon_xml=""
+  if [[ -f "$APP_ICON_ICNS" ]]; then
+    icon_xml=$'  <key>CFBundleIconFile</key>\n  <string>MeetTranscript</string>'
+  fi
+
+  cat > "$plist_path" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -191,6 +197,7 @@ write_info_plist() {
   <string>MeetTranscript</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
+${icon_xml}
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>NSMicrophoneUsageDescription</key>
@@ -227,6 +234,10 @@ build_variant() {
 
   if [[ "$variant" == "full" ]]; then
     bundle_model "$app_bundle/Contents/Resources/runtime_assets/models/$MODEL_NAME"
+  fi
+
+  if [[ -f "$APP_ICON_ICNS" ]]; then
+    cp "$APP_ICON_ICNS" "$app_bundle/Contents/Resources/MeetTranscript.icns"
   fi
 
   echo "Creating DMG for $variant variant ..."

@@ -1,5 +1,7 @@
 # Meet Transcript (macOS)
 
+![MeetTranscript Logo](Brand/meettranscript-logo.svg)
+
 Meet Transcript records meeting audio on macOS and writes local transcripts.
 
 It supports:
@@ -28,6 +30,12 @@ Equivalent without `make`:
 ```
 
 ## Build A DMG For Distribution
+
+Generate the app icon (`Brand/MeetTranscript.icns`) before packaging:
+
+```bash
+make icon
+```
 
 ```bash
 ./scripts/build_dmg.sh --variant lite
