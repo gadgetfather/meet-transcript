@@ -25,14 +25,12 @@ struct ContentView: View {
                         if isCompact {
                             VStack(alignment: .leading, spacing: 14) {
                                 controlsCard
-                                liveCard
                                 transcriptCard
                             }
                         } else {
                             HStack(alignment: .top, spacing: 14) {
                                 VStack(alignment: .leading, spacing: 14) {
                                     controlsCard
-                                    liveCard
                                 }
                                 .frame(width: min(max(340, proxy.size.width * 0.34), 410))
 
@@ -143,44 +141,6 @@ struct ContentView: View {
         }
     }
 
-    @ViewBuilder
-    private var liveCard: some View {
-        cardContainer {
-            VStack(alignment: .leading, spacing: 12) {
-                sectionLabel("Live Transcription")
-
-                if coordinator.liveSpeakerText.isEmpty {
-                    Text("No live text right now.")
-                        .font(.custom("Avenir Next", size: 13))
-                        .foregroundStyle(Palette.muted)
-                } else {
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(coordinator.liveSpeakerText.keys.sorted(), id: \.self) { speaker in
-                            if let text = coordinator.liveSpeakerText[speaker] {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(speaker.uppercased())
-                                        .font(.custom("Avenir Next", size: 11))
-                                        .fontWeight(.semibold)
-                                        .foregroundStyle(speakerColor(for: speaker))
-
-                                    Text(text)
-                                        .font(.custom("Avenir Next", size: 14))
-                                        .foregroundStyle(Palette.text)
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(10)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .fill(Palette.rowBackground)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     private var transcriptCard: some View {
         cardContainer {
             VStack(alignment: .leading, spacing: 12) {
@@ -199,7 +159,7 @@ struct ContentView: View {
                             .fontWeight(.semibold)
                             .foregroundStyle(Palette.title)
 
-                        Text("Start recording to capture live transcription from your meeting audio.")
+                        Text("Start recording to capture transcription from your meeting audio.")
                             .font(.custom("Avenir Next", size: 13))
                             .foregroundStyle(Palette.muted)
                     }
