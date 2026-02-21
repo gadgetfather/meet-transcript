@@ -11,6 +11,13 @@ struct ContentView: View {
         return formatter
     }()
 
+    private let sessionDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
     var body: some View {
         GeometryReader { proxy in
             let isCompact = proxy.size.width < 980
@@ -26,11 +33,13 @@ struct ContentView: View {
                             VStack(alignment: .leading, spacing: 14) {
                                 controlsCard
                                 transcriptCard
+                                sessionsCard
                             }
                         } else {
                             HStack(alignment: .top, spacing: 14) {
                                 VStack(alignment: .leading, spacing: 14) {
                                     controlsCard
+                                    sessionsCard
                                 }
                                 .frame(width: min(max(340, proxy.size.width * 0.34), 410))
 
@@ -208,6 +217,132 @@ struct ContentView: View {
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+
+    private var sessionsCard: some View {
+        cardContainer {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    sectionLabel("Session Files")
+                    Spacer()
+                    Text("\(coordinator.sessionFiles.count) sessions")
+                        .font(.custom("Avenir Next", size: 12))
+                        .foregroundStyle(Palette.muted)
+                }
+
+                HStack(spacing: 8) {
+                    Button("Refresh Files") {
+                        coordinator.refreshSessionFiles()
+                    }
+                    .buttonStyle(PanelButtonStyle(tone: .ghost))
+
+                    Button("Select Missing") {
+                        coordinator.selectAllMissingTranscripts()
+                    }
+                    .buttonStyle(PanelButtonStyle(tone: .secondary))
+                    .disabled(
+                        coordinator.isRecording ||
+                            !coordinator.sessionFiles.contains(where: \.needsTranscriptGeneration)
+                    )
+
+                    Button("Clear") {
+                        coordinator.clearSelectedTranscripts()
+                    }
+                    .buttonStyle(PanelButtonStyle(tone: .ghost))
+                    .disabled(coordinator.selectedSessionPaths.isEmpty)
+                }
+
+                HStack(spacing: 8) {
+                    Text("\(coordinator.selectedSessionPaths.count) selected")
+                        .font(.custom("Avenir Next", size: 12))
+                        .foregroundStyle(Palette.muted)
+
+                    Spacer()
+
+                    Button("Generate Selected") {
+                        coordinator.regenerateSelectedTranscripts()
+                    }
+                    .buttonStyle(PanelButtonStyle(tone: .secondary))
+                    .disabled(
+                        coordinator.isRecording ||
+                            coordinator.isRegeneratingSessionBatch ||
+                            coordinator.selectedSessionPaths.isEmpty
+                    )
+                }
+
+                if coordinator.sessionFiles.isEmpty {
+                    Text("No session folders found yet.")
+                        .font(.custom("Avenir Next", size: 13))
+                        .foregroundStyle(Palette.muted)
+                        .padding(.vertical, 6)
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 10) {
+                            ForEach(coordinator.sessionFiles) { session in
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text(session.sessionName)
+                                        .font(.custom("Avenir Next", size: 13))
+                                        .fontWeight(.semibold)
+                                        .foregroundStyle(Palette.title)
+                                        .lineLimit(1)
+
+                                    if let recordedAt = session.recordedAt {
+                                        Text(sessionDateFormatter.string(from: recordedAt))
+                                            .font(.custom("Avenir Next", size: 11))
+                                            .foregroundStyle(Palette.muted)
+                                    }
+
+                                    Text(session.fileSummary)
+                                        .font(.custom("Avenir Next", size: 12))
+                                        .foregroundStyle(Palette.subtitle)
+                                        .lineLimit(2)
+                                        .truncationMode(.middle)
+
+                                    if session.needsTranscriptGeneration {
+                                        HStack(spacing: 8) {
+                                            Button(
+                                                coordinator.selectedSessionPaths.contains(session.sessionDirectory.path)
+                                                    ? "Selected"
+                                                    : "Select"
+                                            ) {
+                                                coordinator.toggleSessionSelection(for: session.sessionDirectory.path)
+                                            }
+                                            .buttonStyle(PanelButtonStyle(tone: .ghost))
+                                            .disabled(
+                                                coordinator.isRecording || coordinator.isRegeneratingSessionBatch
+                                            )
+
+                                            Button("Generate transcript") {
+                                                coordinator.regenerateMissingTranscript(for: session.sessionDirectory.path)
+                                            }
+                                            .buttonStyle(PanelButtonStyle(tone: .secondary))
+                                            .disabled(
+                                                coordinator.isRecording ||
+                                                    coordinator.activeSessionRegenerations.contains(session.sessionDirectory.path)
+                                            )
+                                        }
+                                    } else {
+                                        Text("Transcript already generated")
+                                            .font(.custom("Avenir Next", size: 11))
+                                            .foregroundStyle(Palette.muted)
+                                    }
+                                }
+                                .padding(10)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .fill(Palette.rowBackground)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                                .stroke(Palette.cardStroke, lineWidth: 1)
+                                        )
+                                )
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 220)
                 }
             }
         }

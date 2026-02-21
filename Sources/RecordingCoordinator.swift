@@ -11,6 +11,10 @@ final class RecordingCoordinator: ObservableObject {
     @Published private(set) var latestSessionPath: String?
     @Published private(set) var microphoneDeviceName = "Unknown microphone"
     @Published private(set) var availableMicrophones: [MicrophoneDeviceOption] = []
+    @Published private(set) var sessionFiles: [SessionFileStatus] = []
+    @Published private(set) var activeSessionRegenerations: Set<String> = []
+    @Published private(set) var selectedSessionPaths: Set<String> = []
+    @Published private(set) var isRegeneratingSessionBatch = false
 
     @Published var captureSystemAudio = false
     @Published var selectedMicrophoneID = "" {
@@ -22,7 +26,6 @@ final class RecordingCoordinator: ObservableObject {
     private let permissionsService = PermissionsService()
     private let transcriptStore = TranscriptStore()
     private let whisperTranscriber = WhisperTranscriberService()
-    private let speakerDiarizationService = SpeakerDiarizationService()
     private let audioMixdownService = AudioMixdownService()
     private let meetingInsightsService = MeetingInsightsService()
 
@@ -38,6 +41,7 @@ final class RecordingCoordinator: ObservableObject {
     init() {
         wirePipeline()
         refreshMicrophoneList()
+        refreshSessionFiles()
     }
 
     deinit {
@@ -93,6 +97,132 @@ final class RecordingCoordinator: ObservableObject {
         microphoneDeviceName = "Unknown microphone"
     }
 
+    func refreshSessionFiles() {
+        do {
+            sessionFiles = try transcriptStore.listSessionFiles()
+            let validSelection = Set(
+                sessionFiles
+                    .filter(\.needsTranscriptGeneration)
+                    .map { $0.sessionDirectory.path }
+            )
+            selectedSessionPaths = selectedSessionPaths.intersection(validSelection)
+        } catch {
+            sessionFiles = []
+            selectedSessionPaths = []
+            statusMessage = "Failed to read session files: \(error.localizedDescription)"
+        }
+    }
+
+    func regenerateMissingTranscript(for sessionPath: String) {
+        Task {
+            await regenerateMissingTranscriptInternal(for: sessionPath)
+        }
+    }
+
+    func selectAllMissingTranscripts() {
+        selectedSessionPaths = Set(
+            sessionFiles
+                .filter(\.needsTranscriptGeneration)
+                .map { $0.sessionDirectory.path }
+        )
+    }
+
+    func clearSelectedTranscripts() {
+        selectedSessionPaths.removeAll()
+    }
+
+    func toggleSessionSelection(for sessionPath: String) {
+        if selectedSessionPaths.contains(sessionPath) {
+            selectedSessionPaths.remove(sessionPath)
+            return
+        }
+        selectedSessionPaths.insert(sessionPath)
+    }
+
+    func regenerateSelectedTranscripts() {
+        Task {
+            await regenerateSelectedTranscriptsInternal()
+        }
+    }
+
+    private func regenerateSelectedTranscriptsInternal() async {
+        guard !isRecording else {
+            statusMessage = "Stop recording before generating transcripts."
+            return
+        }
+
+        let selectedPaths = selectedSessionPaths
+        let missingPaths = sessionFiles
+            .filter { selectedPaths.contains($0.sessionDirectory.path) && $0.needsTranscriptGeneration }
+            .map { $0.sessionDirectory.path }
+
+        guard !missingPaths.isEmpty else {
+            statusMessage = "Select at least one session that needs transcript generation."
+            return
+        }
+
+        isRegeneratingSessionBatch = true
+        defer { isRegeneratingSessionBatch = false }
+
+        for sessionPath in missingPaths {
+            await regenerateMissingTranscriptInternal(for: sessionPath)
+        }
+    }
+
+    private func regenerateMissingTranscriptInternal(for sessionPath: String) async {
+        guard !isRecording else {
+            statusMessage = "Stop recording before generating transcripts."
+            return
+        }
+        guard !activeSessionRegenerations.contains(sessionPath) else {
+            return
+        }
+        guard let session = sessionFiles.first(where: { $0.sessionDirectory.path == sessionPath }) else {
+            refreshSessionFiles()
+            statusMessage = "Session not found: \(sessionPath)"
+            return
+        }
+        guard session.needsTranscriptGeneration else {
+            statusMessage = "Transcript already exists for \(session.sessionName)."
+            return
+        }
+
+        activeSessionRegenerations.insert(sessionPath)
+        defer {
+            activeSessionRegenerations.remove(sessionPath)
+            refreshSessionFiles()
+        }
+
+        if !(session.hasMicrophoneAudio || session.hasSystemAudio) {
+            statusMessage = "No audio files found in \(session.sessionName)."
+            return
+        }
+
+        var generatedSegments: [TranscriptSegment] = []
+        let recordingStart = transcriptStore.inferredSessionStartDate(for: session.sessionDirectory) ?? Date()
+
+        statusMessage = "Generating transcript for \(session.sessionName)..."
+        await transcribeWithWhisper(
+            sessionDirectory: session.sessionDirectory,
+            usedSystemAudio: session.hasSystemAudio,
+            recordingStartedAt: recordingStart,
+            segments: &generatedSegments
+        )
+
+        generatedSegments.sort { $0.timestamp < $1.timestamp }
+        generatedSegments = deduplicatedSegments(from: generatedSegments)
+        let insights = meetingInsightsService.generate(from: generatedSegments)
+
+        do {
+            try transcriptStore.saveTranscript(generatedSegments, in: session.sessionDirectory)
+            try transcriptStore.saveInsights(insights, in: session.sessionDirectory)
+            selectedSessionPaths.remove(sessionPath)
+            statusMessage = "Generated transcript for \(session.sessionName)."
+        } catch {
+            statusMessage = "Failed to save transcript for \(session.sessionName): \(error.localizedDescription)"
+        }
+    }
+
     private func wirePipeline() {
         microphoneCapture.onBuffer = { [weak self] buffer in
             self?.microphoneTranscriber.append(buffer)
@@ -117,6 +247,10 @@ final class RecordingCoordinator: ObservableObject {
 
     private func startRecording() async {
         guard !isRecording else {
+            return
+        }
+        guard activeSessionRegenerations.isEmpty, !isRegeneratingSessionBatch else {
+            statusMessage = "Please wait for transcript generation to finish."
             return
         }
 
@@ -144,6 +278,7 @@ final class RecordingCoordinator: ObservableObject {
             latestSessionPath = sessionDirectory.path
             activeCaptureSystemAudio = useSystemAudio
             recordingStartedAt = Date()
+            refreshSessionFiles()
 
             transcriptSegments = []
             liveSpeakerText = [:]
@@ -206,6 +341,7 @@ final class RecordingCoordinator: ObservableObject {
         }
 
         flushLiveTranscriptToSegments()
+        var finalizedSegments = transcriptSegments
 
         let usedSystemAudio = activeCaptureSystemAudio
         let recordingStart = recordingStartedAt ?? Date()
@@ -223,11 +359,12 @@ final class RecordingCoordinator: ObservableObject {
         await transcribeWithWhisper(
             sessionDirectory: currentSessionDirectory,
             usedSystemAudio: usedSystemAudio,
-            recordingStartedAt: recordingStart
+            recordingStartedAt: recordingStart,
+            segments: &finalizedSegments
         )
 
-        transcriptSegments.sort { $0.timestamp < $1.timestamp }
-        deduplicateTranscriptSegments()
+        finalizedSegments.sort { $0.timestamp < $1.timestamp }
+        transcriptSegments = deduplicatedSegments(from: finalizedSegments)
 
         let insights = meetingInsightsService.generate(from: transcriptSegments)
 
@@ -235,6 +372,7 @@ final class RecordingCoordinator: ObservableObject {
             try transcriptStore.saveTranscript(transcriptSegments, in: currentSessionDirectory)
             try transcriptStore.saveInsights(insights, in: currentSessionDirectory)
             statusMessage = "Saved transcript to \(currentSessionDirectory.path)"
+            refreshSessionFiles()
         } catch {
             statusMessage = "Stopped, but failed to save outputs: \(error.localizedDescription)"
         }
@@ -292,11 +430,11 @@ final class RecordingCoordinator: ObservableObject {
     private func transcribeWithWhisper(
         sessionDirectory: URL,
         usedSystemAudio: Bool,
-        recordingStartedAt: Date
+        recordingStartedAt: Date,
+        segments: inout [TranscriptSegment]
     ) async {
         let microphoneURL = sessionDirectory.appendingPathComponent("microphone.caf")
         let systemURL = sessionDirectory.appendingPathComponent("system.caf")
-        var systemDiarization: [DiarizationSegment] = []
 
         if FileManager.default.fileExists(atPath: microphoneURL.path) {
             statusMessage = "Whisper: transcribing microphone..."
@@ -308,7 +446,7 @@ final class RecordingCoordinator: ObservableObject {
                    diarizationSegments: []
                )
             {
-                replaceSegments(where: { $0.speaker == "You" }, with: micSegments)
+                replaceSegments(in: &segments, where: { $0.speaker == "You" }, with: micSegments)
             }
         }
 
@@ -317,27 +455,25 @@ final class RecordingCoordinator: ObservableObject {
         }
 
         if FileManager.default.fileExists(atPath: systemURL.path) {
-            statusMessage = "Whisper: diarizing system audio..."
-            systemDiarization = await diarizeSystemAudioWithRetry(audioURL: systemURL) ?? []
-
             statusMessage = "Whisper: transcribing system audio..."
             if let systemResult = await whisperWithRetry(audioURL: systemURL),
                let systemSegments = makeSegments(
                    from: systemResult,
                    speaker: "Others",
                    recordingStartedAt: recordingStartedAt,
-                   diarizationSegments: systemDiarization
+                   diarizationSegments: []
                )
             {
                 replaceSegments(
+                    in: &segments,
                     where: { $0.speaker == "Others" || $0.speaker == "Mixed" || $0.speaker.hasPrefix("Participant ") },
                     with: systemSegments
                 )
             }
         }
 
-        let hasMic = transcriptSegments.contains { $0.speaker == "You" }
-        let hasSystem = transcriptSegments.contains { $0.speaker == "Others" || $0.speaker.hasPrefix("Participant ") }
+        let hasMic = segments.contains { $0.speaker == "You" }
+        let hasSystem = segments.contains { $0.speaker == "Others" || $0.speaker.hasPrefix("Participant ") }
 
         if !(hasMic && hasSystem),
            FileManager.default.fileExists(atPath: microphoneURL.path),
@@ -361,7 +497,7 @@ final class RecordingCoordinator: ObservableObject {
                    diarizationSegments: []
                )
             {
-                replaceSegments(where: { $0.speaker == "Mixed" }, with: mixedSegments)
+                replaceSegments(in: &segments, where: { $0.speaker == "Mixed" }, with: mixedSegments)
             }
         }
     }
@@ -380,29 +516,6 @@ final class RecordingCoordinator: ObservableObject {
 
             if attempt < attempts - 1 {
                 try? await Task.sleep(nanoseconds: 700_000_000)
-            }
-        }
-
-        return nil
-    }
-
-    private func diarizeSystemAudioWithRetry(audioURL: URL, attempts: Int = 2) async -> [DiarizationSegment]? {
-        for attempt in 0 ..< attempts {
-            do {
-                let result = try await speakerDiarizationService.diarize(
-                    audioURL: audioURL,
-                    minSpeakers: 1,
-                    maxSpeakers: 4
-                )
-                if !result.segments.isEmpty {
-                    return result.segments
-                }
-            } catch {
-                statusMessage = "Diarization warning: \(error.localizedDescription)"
-            }
-
-            if attempt < attempts - 1 {
-                try? await Task.sleep(nanoseconds: 600_000_000)
             }
         }
 
@@ -572,11 +685,11 @@ final class RecordingCoordinator: ObservableObject {
             .range(of: "[.!?…][\"'”’)]*$", options: .regularExpression) != nil
     }
 
-    private func deduplicateTranscriptSegments() {
+    private func deduplicatedSegments(from segments: [TranscriptSegment]) -> [TranscriptSegment] {
         var deduplicated: [TranscriptSegment] = []
         let duplicateWindow: TimeInterval = 8
 
-        for segment in transcriptSegments {
+        for segment in segments {
             let normalizedText = normalizedComparisonText(segment.text)
 
             if let previous = deduplicated.last {
@@ -593,7 +706,7 @@ final class RecordingCoordinator: ObservableObject {
             deduplicated.append(segment)
         }
 
-        transcriptSegments = deduplicated
+        return deduplicated
     }
 
     private func normalizedComparisonText(_ text: String) -> String {
@@ -630,10 +743,11 @@ final class RecordingCoordinator: ObservableObject {
     }
 
     private func replaceSegments(
+        in segments: inout [TranscriptSegment],
         where predicate: (TranscriptSegment) -> Bool,
         with newSegments: [TranscriptSegment]
     ) {
-        transcriptSegments.removeAll(where: predicate)
-        transcriptSegments.append(contentsOf: newSegments)
+        segments.removeAll(where: predicate)
+        segments.append(contentsOf: newSegments)
     }
 }
