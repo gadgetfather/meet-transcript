@@ -6,6 +6,9 @@
 
 Meet Transcript records meeting audio on macOS and writes local transcripts.
 
+Live app domain:
+- https://meet-transcript.vercel.app/
+
 It supports:
 - Microphone audio (`You`)
 - Optional system audio (`Participant 1..N` via best-effort diarization)
