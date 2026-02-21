@@ -1054,7 +1054,10 @@
         revealEls.forEach(el => io.observe(el));
     </script>
 
-    <!-- Cloudflare Web Analytics — replace YOUR_TOKEN with your Site Tag from the Cloudflare dashboard -->
-    <script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "YOUR_TOKEN"}'></script>
+    <!-- Vercel Web Analytics -->
+    <script>
+        window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
+    </script>
+    <script defer src="/_vercel/insights/script.js"></script>
 </body>
 </html>
