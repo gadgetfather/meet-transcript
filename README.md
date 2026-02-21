@@ -2,6 +2,8 @@
 
 ![MeetTranscript Logo](Brand/meettranscript-logo.svg)
 
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy_Me_A_Coffee-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=000000)](https://buymeacoffee.com/gadgetfather)
+
 Meet Transcript records meeting audio on macOS and writes local transcripts.
 
 It supports:
@@ -109,6 +111,11 @@ Useful flags:
 
 - System audio capture is optional and off by default.
 - On first transcription, Whisper may download model files (cached locally in `.cache/`).
+
+## Support
+
+If this project helps you, you can support it here:
+- https://buymeacoffee.com/gadgetfather
 
 ## Next improvements
 
